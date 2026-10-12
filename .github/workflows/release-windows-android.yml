@@ -179,19 +179,31 @@ jobs:
             tag="v$VERSION"
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@v4
+      # Not into dist/: packaging/env.sh (sourced above for the version) creates dist/release.
+      - uses: actions/download-artifact@v5
         with:
           pattern: release-*
-          path: dist
+          path: release-assets
           merge-multiple: true
+      - name: Check the files
+        run: |
+          set -euo pipefail
+          ls -l release-assets
+          for pattern in '*-windows-x64.exe' '*-windows-x64.msi' '*-windows-x64-portable.zip' '*-android-arm64.apk'; do
+            if [ -z "$(find release-assets -maxdepth 1 -type f -name "$pattern" -size +0 -print -quit)" ]; then
+              echo "::error::missing release file $pattern"
+              exit 1
+            fi
+          done
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
-          ls -l dist
+          set -euo pipefail
           if ! gh release view "$TAG" > /dev/null 2>&1; then
             gh release create "$TAG" --target "$GITHUB_SHA" --title "FilmCraft ${TAG#v}" \
               --notes "Windows: \`.exe\` (the app), \`.msi\` (installer) or \`-portable.zip\`. Android (8.0+, 64-bit ARM): install the \`.apk\`."
           fi
-          gh release upload "$TAG" dist/* --clobber
+          find release-assets -maxdepth 1 -type f -print0 | xargs -0 gh release upload "$TAG" --clobber
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.name)  \(.size) bytes"'
