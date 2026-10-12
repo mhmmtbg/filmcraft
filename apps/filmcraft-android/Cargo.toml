@@ -1,0 +1,84 @@
+[package]
+name = "filmcraft-android"
+description = "FilmCraft on Android phones and tablets: the shared engine and egui UI on a NativeActivity (Vulkan/GLES, AAudio)"
+version = "0.7.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+publish = false
+
+# Its own workspace, left out of the root one (root Cargo.toml `exclude`): its Android-only
+# dependencies would otherwise have to be in the root Cargo.lock, and the desktop gates
+# (`cargo test --workspace`, clippy, `xtask layers`) stay exactly as they were. Build it with
+# `packaging/android/package.sh` (cargo-apk + the Android SDK/NDK); see packaging/android/README.md.
+[workspace]
+
+# The workspace lints, except that `unsafe_code` is `deny` instead of `forbid`: the NativeActivity
+# glue looks the entry point up by name, so `android_main` needs `#[unsafe(no_mangle)]` — the only
+# item that opts in with `#[allow(unsafe_code)]`. There is no `unsafe` block in this crate.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+too_many_arguments = "allow"
+needless_range_loop = "allow"
+type_complexity = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Everything is Android-only: on other targets the crate is empty.
+[target.'cfg(target_os = "android")'.dependencies]
+filmcraft-engine = { path = "../../crates/engine" }
+filmcraft-export = { path = "../../crates/export" }
+filmcraft-gpu = { path = "../../crates/gpu" }
+filmcraft-project = { path = "../../crates/project" }
+filmcraft-render = { path = "../../crates/render" }
+filmcraft-time = { path = "../../crates/time" }
+filmcraft-ui-egui = { path = "../../crates/ui-egui" }
+egui = "0.36"
+eframe = { version = "0.36", default-features = false, features = ["default_fonts", "wgpu", "android-native-activity"] }
+# The winit eframe runs on, to name the `AndroidApp` handed to `android_main`.
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }
+serde_json = "1"
+log = "0.4"
+# logcat (MIT OR Apache-2.0)
+android_logger = { version = "0.15", default-features = false }
+# AAudio playback through the same cpal output as the desktop app (src/audio.rs is shared).
+cpal = "0.16"
+# Settings ▸ General ▸ Interface Language ▸ System Language (MIT OR Apache-2.0; reads the Android locale).
+sys-locale = "0.3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[package.metadata.android]
+package = "ai.storyteller.filmcraft"
+apk_name = "filmcraft"
+build_targets = ["aarch64-linux-android"]
+# res/mipmap-*/ic_launcher.png, generated from assets/app-icon/filmcraft-1024.png by
+# packaging/android/package.sh (gitignored, so no new asset files are committed).
+resources = "res"
+
+[package.metadata.android.sdk]
+# AAudio (cpal's Android backend) needs API 26 (Android 8.0).
+min_sdk_version = 26
+target_sdk_version = 34
+
+[package.metadata.android.application]
+label = "FilmCraft"
+icon = "@mipmap/ic_launcher"
+debuggable = false
+
+[package.metadata.android.application.activity]
+# The editor is laid out for a wide screen: landscape, either way up.
+orientation = "sensorLandscape"
+config_changes = "orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|navigation|uiMode|density"
+launch_mode = "singleTask"
+

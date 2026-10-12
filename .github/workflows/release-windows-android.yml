@@ -1,0 +1,163 @@
+name: Release (Windows + Android)
+
+# Builds the Windows installer/exe and the Android APK and attaches them to a GitHub release.
+# Push a tag (`git tag v0.7.0 && git push origin v0.7.0`) or run it from the Actions tab. Uses
+# only GitHub-hosted standard runners, so it works in forks without the org's macOS runners or
+# signing secrets (builds are then unsigned / signed with a throwaway Android key).
+#
+# Optional secrets:
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD  one key for every APK, so new versions
+#                                                       install over old ones
+#   WINDOWS_CERTIFICATE, WINDOWS_CERTIFICATE_PASSWORD   Authenticode (see packaging/windows/sign.ps1)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create or update (empty: v<Cargo.toml version>)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-windows-android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CRAFT_FONTS_REF: abb83316d96aa59c1cf64784289e378fe9fa5695
+
+jobs:
+  windows:
+    name: Windows x64 (.exe, .msi, portable .zip)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-x64
+      - name: Install WiX
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Build and package
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          DIST: ${{ github.workspace }}/dist/release
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          pwsh packaging/windows/package.ps1 -Arch x64
+          # The bare app as well, for people who just want filmcraft.exe.
+          $v = (Get-ChildItem dist/release/*.msi | Select-Object -First 1).BaseName -replace '^filmcraft-(.+)-windows-x64$', '$1'
+          Copy-Item target/windows-package/x64/filmcraft.exe "dist/release/filmcraft-$v-windows-x64.exe"
+          Get-ChildItem dist/release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows-x64
+          path: dist/release/*
+          if-no-files-found: error
+
+  android:
+    name: Android arm64 (.apk)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: storytold/craft-fonts
+          ref: ${{ env.CRAFT_FONTS_REF }}
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android-arm64
+          workspaces: apps/filmcraft-android -> ../../target
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Android SDK platform, build-tools and NDK
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" --install "platforms;android-34" "build-tools;34.0.0" "ndk;26.3.11579264" > /dev/null
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+      - name: Install cargo-apk and ImageMagick
+        run: |
+          cargo install cargo-apk --locked
+          sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+      - name: Signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+            echo "CARGO_APK_RELEASE_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+            echo "CARGO_APK_RELEASE_KEYSTORE_PASSWORD=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: the APK is signed with a throwaway key, so the next one cannot install over it."
+          fi
+      - name: Build and package
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+        run: packaging/android/package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android-arm64
+          path: dist/release/*.apk
+          if-no-files-found: error
+
+  release:
+    name: Publish to GitHub release
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+          elif [ -n "$INPUT_TAG" ]; then
+            tag="$INPUT_TAG"
+          else
+            . packaging/env.sh
+            tag="v$VERSION"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          ls -l dist
+          if ! gh release view "$TAG" > /dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "FilmCraft ${TAG#v}" \
+              --notes "Windows: \`.exe\` (the app), \`.msi\` (installer) or \`-portable.zip\`. Android (8.0+, 64-bit ARM): install the \`.apk\`."
+          fi
+          gh release upload "$TAG" dist/* --clobber

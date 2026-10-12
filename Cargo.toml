@@ -2,6 +2,8 @@
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/*", "xtask"]
+# Its own workspace (Android-only dependencies, built with packaging/android/package.sh).
+exclude = ["apps/filmcraft-android"]
 
 [workspace.package]
 version = "0.7.0"
