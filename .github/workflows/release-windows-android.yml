@@ -1,7 +1,8 @@
 name: Release (Windows + Android)
 
 # Builds the Windows installer/exe and the Android APK and attaches them to a GitHub release.
-# Push a tag (`git tag v0.7.0 && git push origin v0.7.0`) or run it from the Actions tab. Uses
+# Push a tag (`git tag v0.7.0 && git push origin v0.7.0`), push to the `release-builds` branch
+# (release tag v<Cargo.toml version>), or run it from the Actions tab. Uses
 # only GitHub-hosted standard runners, so it works in forks without the org's macOS runners or
 # signing secrets (builds are then unsigned / signed with a throwaway Android key).
 #
@@ -13,6 +14,7 @@ name: Release (Windows + Android)
 on:
   push:
     tags: ["v*"]
+    branches: [release-builds]
   workflow_dispatch:
     inputs:
       tag:
