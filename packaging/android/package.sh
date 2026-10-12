@@ -22,6 +22,9 @@ echo "FilmCraft $VERSION for Android arm64 ($TARGET)"
 
 # The crate is its own workspace; its version follows the root one (versionName/versionCode).
 sed -i "0,/^version = \".*\"/s//version = \"$VERSION\"/" "$CRATE/Cargo.toml"
+# Start from the root lock file, so every crate the desktop app also uses gets the exact version
+# the desktop gates test; cargo then only adds the Android-only crates (gitignored copy).
+cp "$ROOT/Cargo.lock" "$CRATE/Cargo.lock"
 
 # Launcher icons from the app icon (generated, gitignored: no new asset files in the repo).
 MAGICK="$(command -v magick || command -v convert || true)"
